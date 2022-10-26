@@ -1,163 +1,212 @@
 # issues / queries contact Ben Saunders (ben.saunders@wsp.com)
-# version 5.2022A
-# Simplification to avoid use of widgets
+# version 2.2020
 
-import time
 import pandas as pd
 pd.options.mode.chained_assignment = None
 import numpy as np
+from ipywidgets import Checkbox, Output, VBox, widgets, Layout, Box, Label, HTML, Image
 from os import listdir, mkdir, path
 from os.path import isfile, join
 from IPython.display import display, display_html
+from shutil import make_archive, rmtree   
+geop = True
+try:
+	import geopandas as gpd
+except ImportError:
+	print("Geopandas not installed. Shape files cannot be exported.")
+	geop = False
 
     # Main function (Main) that provides main loop for GUI elements. Inputs are the file input 
     # location, output location, and criteria parameters for LOAEL, SOAEL, NLOAEL and NSOAEL.
     # This function largely relates to the OPERATION of the software, and is not associated 
     # with any acoustic parameters or assumptions. 
 
-def Main(inputfilename, outputfilename, LOAEL, SOAEL, NLOAEL, NSOAEL, Day, Night, ST, LT, Excelout, WebTAG, NIR):
-    inputloc,outputloc = FolderCheck()
-    D, N, S, L, P, W, I, = 0, 0, 0, 0, 0, 0, 0
-    Columns, OColumns = [], []
-    val, D, N, S, L, P, W, I = Selection(Day, Night, ST, LT, Excelout, WebTAG, NIR, D, N, S, L, P, W, I)
-    if val == 1:
-        print('Error')
-    else:
-        fullpath = inputloc+'/'+inputfilename
-        tic = time.perf_counter()
-        Tab1 = ExcelRead(fullpath)
-        tic1 = time.perf_counter()
-        Tab1, Columns, OColumns = AddColumns(Tab1,D,N,S,L)
-        DMRB_ST, DMRB_LT, RelDF, RelColumns = LBCGC(Tab1, Columns, OColumns, D, N, S, L)
-        tic2 = time.perf_counter()
-        DisplayDMRBTables(DMRB_ST, DMRB_LT, S, L)
-        AbsDF, AbsDFCol, NIRDF = AbsOut(Tab1, RelDF, OColumns, LOAEL, SOAEL, NLOAEL, NSOAEL, D, N, S, L, I)
-        tic3 = time.perf_counter()
-        RelDF, WebTAG1, WebTAG2, WebTAGN1, WebTAGN2 = WebTAGF(RelDF, OColumns, W, D, N)
-        DisplayWebTAGTables(WebTAG1, WebTAG2, WebTAGN1, WebTAGN2, D, N, W)
-        tic4 = time.perf_counter()
-        DataOutput(outputloc, outputfilename, AbsDF, AbsDFCol, RelDF, RelColumns, WebTAG1, WebTAG2, WebTAGN1, WebTAGN2, NIRDF, P, D, N, W, I)
-        tic5 = time.perf_counter()
-        print('\n> Process complete')
-        print('\n> Execution time: \n> Read data: ', round(tic1-tic,3),'seconds\n> Magnitude of change calculation: ', round(tic2-tic1,3), 'seconds\n> Absolute levels calculation: ', round(tic3-tic2,3), 'seconds\n> WebTAG calculation: ', round(tic4-tic3,3), 'seconds\n> Output / writing files: ', round(tic5-tic4,3), 'seconds')
 
-    # This function creates input and output folders if not found 
-def FolderCheck():
-    inputfol = 'Input'
-    outputfol = 'Output'
-    inputloc, outputloc = inputfol, outputfol
-    if not path.isdir(inputloc):
-        mkdir(inputloc)
-    if not path.isdir(outputloc):
-        mkdir(outputloc)
-    return(inputloc, outputloc)
+def Main(inputloc, outputloc, LOAEL, SOAEL, NLOAEL, NSOAEL):
+    out = Output()
+    def on_button_clicked(b):
+        D, N, S, L, P, W, I, G = 0, 0, 0, 0, 0, 0, 0, 0
+        Columns, OColumns = [], []
+        with out:
+            out.clear_output()
+            Fileoutput, val, D, N, S, L, P, W, I, G = Selection(FileList, Day, Night, ST, LT, PS, WT, NIR, GS, D, N, S, L, P, W, I, G)
+            if val == 1:
+                print('Error')
+            else:
+                fullpath = inputloc+Fileoutput[0]
+                Tab1 = ExcelRead(fullpath)
+                Tab1, Columns, OColumns = AddColumns(Tab1,D,N,S,L)
+                DMRB_ST, DMRB_LT, RelDF, RelColumns = LBCGC(Tab1, Columns, OColumns, D, N, S, L)
+                DisplayDMRBTables(DMRB_ST, DMRB_LT, S, L, out)
+                AbsDF, AbsDFCol, NIRDF = AbsOut(Tab1, RelDF, OColumns, LOAEL, SOAEL, NLOAEL, NSOAEL, outputloc, D, N, S, L, I)
+                RelDF, WebTAG1, WebTAG2 = WebTAG(RelDF, OColumns, W)
+                DisplayWebTAGTables(WebTAG1, WebTAG2, W)
+                DataOutput(AbsDF, AbsDFCol, RelDF, RelColumns, WebTAG1, WebTAG2, NIRDF, G, P, W, I)
+                print('\n> Process complete')
+                
+    WSPImage = Image(value=open('wsp_RGB.jpg', 'rb').read())
+    WSPImage.layout.width = '7%'
+    WSPImage.layout.height = '7%'
+    WSPImage.layout.margin = '0 0 0 0'
+    Day = Checkbox(False, description='Day time')
+    Night = Checkbox(False, description='Night time')
+    ST = Checkbox(False, description='Short term')
+    LT = Checkbox(False, description='Long term')
+    WT = Checkbox(False, description='WebTAG')
+    NIR = Checkbox(False, description='Noise Insulation Regulations')
+    PS = Checkbox(False, description='Excel output')
+    if geop:
+        GS = Checkbox(False, description='Shapefile outputs')
+    else:
+        GS = Label(value='', align='left')
+
+    onlyfiles = [f for f in listdir(inputloc) if isfile(join(inputloc, f))]
+
+    FileList = []
+    for i, files in enumerate(onlyfiles):
+        FileList.append(Checkbox(False, description=files))
+
+    form_item_layout = Layout(
+        display='flex',
+        flex_flow='row',
+        justify_content='space-between'
+    )
     
+    title = widgets.HTML(value="<span style='color:red;font-size:16px'>DMRB LA111 Processing Tool</span>")
+    wsp = Box([title, WSPImage], layout=form_item_layout)
+    
+    form_items = [
+        Box([Label(value='Available files:'), VBox(FileList)], layout=form_item_layout),
+        Box([Label(value='Scenario:'), VBox([Day, Night])], layout=form_item_layout)
+    ]
+    form_items2 = [
+        Box([Label(value='LA111 table: '), VBox([ST, LT])], layout=form_item_layout),
+        Box([Label(value='Further calculation: '), VBox([WT, NIR])], layout=form_item_layout),
+        Box([Label(value='Output: '), VBox([PS, GS])], layout=form_item_layout),
+    ]
+    form = Box(form_items, layout=Layout(
+        display='flex',
+        flex_flow='column',
+        align_items='stretch',
+        width='50%'
+    ))
+    form2 = Box(form_items2, layout=Layout(
+        display='flex',
+        flex_flow='column',
+        align_items='stretch',
+        width='50%'
+    ))
+
+    display(wsp, form, form2)   
+    button = widgets.Button(description="Calculate")
+    display(button)
+    button.on_click(on_button_clicked)
+    return(out)
+
     # This function (Selection) processes inputs from the user and outputs required 
     # parameters for other functions. It relates to the OPERATION of the software, and 
     # is not associated with any acoustic parameters or assumptions. 
 
-def Selection(Day, Night, ST, LT, PS, WT, NIR, D, N, S, L, P, W, I):
+def Selection(FileList, Day, Night, ST, LT, PS, WT, NIR, GS, D, N, S, L, P, W, I, G):
+    Fileoutput = []
     val = 0
     t1, t2, t3, t4 = '','','',''
-    if Day:
-        D = 1
-        t1 = 'day time'
-    else:
-        D = 0    
-    if Night:
-        N = 1
-        if Day:
-            t2 = ' and night time'
+    for i, files in enumerate(FileList):
+        if FileList[i].value == True:
+            Fileoutput.append(FileList[i].description) 
+    if len(Fileoutput) < 1:
+        print('> Select a file')
+        val = 1
+    if len(Fileoutput) > 1:
+        print('> Only one dataset can be processed at a time')
+        val = 1
+    if len(Fileoutput) == 1:
+        print('> Reading: ', Fileoutput[0])
+        if Day.value == True:
+            D = 1
+            t1 = 'day time'
         else:
-            t2 = 'night time'
-    else:
-        N = 0
-    if ST:
-        S = 1
-        t3 = 'short term' 
-    else:
-        S = 0    
-    if LT:
-        L = 1
-        if ST:
-            t4 = ' and long term'
+            D = 0    
+        if Night.value == True:
+            N = 1
+            if Day.value == True:
+                t2 = ' and night time'
+            else:
+                t2 = 'night time'
         else:
-            t4 = 'long term'
-    else:
-        L = 0          
-    if ST == False and LT == False:
-        val = 1
-        print('> Select short term or long term calculation')
-    if Day == False and Night == False:
-        val = 1 
-        print('> Select Day or night time calculation')
-    if val != 1:
-        print('> Summarising ' + t1 + t2 + ' magnitude of impact over the ' + t3 + t4 + '\n')
-    if PS:
-        P = 1
-    else:
-        P = 0   
-    if WT:
-        W = 1
-    else:
-        W = 0    
-    if NIR:
-        I = 1
-    else:
-        I = 0
-    if NIR == True and ST == False:
-        val = 1
-        print('> Select short term for Noise Insulation calculation')
-    if NIR == True and Day == False:
-        val = 1
-        print('> Select Day time for Noise Insulation calculation')
-    return(val, D, N, S, L, P, W, I)
+            N = 0
+        if ST.value == True:
+            S = 1
+            t3 = 'short term' 
+        else:
+            S = 0    
+        if LT.value == True:
+            L = 1
+            if ST.value == True:
+                t4 = ' and long term'
+            else:
+                t4 = 'long term'
+        else:
+            L = 0          
+        if ST.value == False and LT.value == False:
+            val = 1
+            print('> Select short term or long term calculation')
+        if Day.value == False and Night.value == False:
+            val = 1 
+            print('> Select Day or night time calculation')
+        if val != 1:
+            print('> Summarising ' + t1 + t2 + ' magnitude of impact over the ' + t3 + t4)
+        if PS.value == True:
+            P = 1
+        else:
+            P = 0   
+        if WT.value == True:
+            W = 1
+        else:
+            W = 0    
+        if NIR.value == True:
+            I = 1
+        else:
+            I = 0   
+        if NIR.value == True and ST.value == False:
+            val = 1
+            print('> Select short term for Noise Insulation calculation')
+        if GS.value == True:
+            G = 1
+        else:
+            G = 0   
+    return(Fileoutput, val, D, N, S, L, P, W, I, G)
 
-    # This function (WebTAGF) prepares the WebTAG table. Residential 'RES' rows are selected from 
+    # This function (WebTAG) prepares the WebTAG table. Residential 'RES' rows are selected from 
     # the buidling evaluation data and are passed to the Tabular function that sorts values in
     # in 3dB catagories. The table (dataframe) is iterated over each row and column, and a  
     # comparison between DMOY - DSOY, DMFY - DSFY for the opening year and future year and returns the 
     # sum for each.
     
-def WebTAGF(dfInput, OColumns, W, D, N):
+def WebTAG(dfInput, OColumns, W):
     if W == 1:
         df = dfInput[dfInput['SNSTV']=='RES'].reset_index()
         WT = [45,48,51,54,57,60,63,66,69,72,75,78,81]
+        DMOYdf = Tabular(df, 'DMOY_ST', OColumns, WT) # Do minimum opening year based on greatest short term change
+        DSOYdf = Tabular(df, 'DSOY', OColumns, WT)
+        DMFYdf = Tabular(df, 'DMFY', OColumns, WT)
+        DSFYdf = Tabular(df, 'DSFY', OColumns, WT)
         WTCat = ['<45','45-48','48-51','51-54','54-57','57-60','60-63','63-66','66-69','69-72','72-75','75-78','78-81','>=81']
-        if D == 1:
-            WebTAGdf1 = pd.DataFrame(columns=WTCat, index=WTCat)
-            WebTAGdf2 = pd.DataFrame(columns=WTCat, index=WTCat)
-            DMOYdf = Tabular(df, 'DMOY_WT', OColumns, WT, 'Day') # Do minimum opening year based on greatest short term change
-            DSOYdf = Tabular(df, 'DSOY_WT', OColumns, WT, 'Day') # Do something opening year based on greatest short term change
-            DMFYdf = Tabular(df, 'DMFY_WT', OColumns, WT, 'Day') # Do minimum future year based on greatest short term future year change
-            DSFYdf = Tabular(df, 'DSFY_WT', OColumns, WT, 'Day') # Do something future year based on greatest short term future year change
-            for column in WebTAGdf1:            
-                for row in WebTAGdf1[column].items():
-                    WebTAGdf1.loc[column,row[0]] = np.sum((DMOYdf.loc[:,column]==True)&(DSOYdf.loc[:,row[0]]==True))
-                    WebTAGdf2.loc[column,row[0]] = np.sum((DMFYdf.loc[:,column]==True)&(DSFYdf.loc[:,row[0]]==True))
-        else:
-            WebTAGdf1, WebTAGdf2 = 0, 0
-        if N == 1:
-            WebTAGNdf1 = pd.DataFrame(columns=WTCat, index=WTCat)
-            WebTAGNdf2 = pd.DataFrame(columns=WTCat, index=WTCat)
-            DMOYNdf = Tabular(df, 'DMOYN_WT', OColumns, WT, 'Night') # Do minimum opening year based on greatest short term change
-            DSOYNdf = Tabular(df, 'DSOYN_WT', OColumns, WT, 'Night')
-            DMFYNdf = Tabular(df, 'DMFYN_WT', OColumns, WT, 'Night') # Do minimum future year based on greatest FY-FY change
-            DSFYNdf = Tabular(df, 'DSFYN_WT', OColumns, WT, 'Night')
-            for column in WebTAGNdf1:
-                for row in WebTAGNdf1[column].items():
-                    WebTAGNdf1.loc[column,row[0]] = np.sum((DMOYNdf.loc[:,column]==True)&(DSOYNdf.loc[:,row[0]]==True))
-                    WebTAGNdf2.loc[column,row[0]] = np.sum((DMFYNdf.loc[:,column]==True)&(DSFYNdf.loc[:,row[0]]==True))
-        else:
-            WebTAGNdf1, WebTAGNdf2 = 0, 0
+        WebTAGdf1 = pd.DataFrame(columns=WTCat, index=WTCat)
+        WebTAGdf2 = pd.DataFrame(columns=WTCat, index=WTCat)
+        for column in WebTAGdf1:            
+            for row in WebTAGdf1[column].iteritems():
+                WebTAGdf1.loc[column,row[0]] = np.sum((DMOYdf.loc[:,column]==True)&(DSOYdf.loc[:,row[0]]==True))
+                WebTAGdf2.loc[column,row[0]] = np.sum((DMFYdf.loc[:,column]==True)&(DSFYdf.loc[:,row[0]]==True))
     else:
-        WebTAGdf1, WebTAGdf2, WebTAGNdf1, WebTAGNdf2 = 0, 0, 0, 0
-    return(dfInput, WebTAGdf1, WebTAGdf2, WebTAGNdf1, WebTAGNdf2)
+        WebTAGdf1, WebTAGdf2 = 0, 0
+        dfInput.drop('DMOY_ST')
+    return(dfInput, WebTAGdf1, WebTAGdf2)
 
     # This function (DisplayDMRBTables) styles pandas dataframes for CSS / HTML. It relates to the 
     # OPERATION of the software, and is not associated with any acoustic parameters or assumptions. 
 
-def DisplayDMRBTables(DMRB_ST,DMRB_LT, S, L):   
+def DisplayDMRBTables(DMRB_ST,DMRB_LT, S, L, out):   
     DMRB_ST.fillna(0, inplace=True)
     DMRB_LT.fillna(0, inplace=True)
     Table1 = DMRB_ST.set_index('Change').rename_axis(None)
@@ -185,16 +234,11 @@ def DisplayDMRBTables(DMRB_ST,DMRB_LT, S, L):
     # This function (DisplayWebTAGTables) styles pandas dataframes for CSS / HTML. It relates to the 
     # OPERATION of the software, and is not associated with any acoustic parameters or assumptions. 
     
-def DisplayWebTAGTables(WebTAG1, WebTAG2, WebTAGN1, WebTAGN2, D, N, W):
-    print('\n')
-    if D == 1:
-        WebTAGOut1, WebTAGOut2 = WebTAG1, WebTAG2
-    if N == 1 and D == 0:
-        WebTAGOut1, WebTAGOut2 = WebTAGN1, WebTAGN2
+def DisplayWebTAGTables(WebTAG1, WebTAG2, W):
     if W == 1:
-        df1_styler = WebTAGOut1.style.set_table_attributes("style='display:block'") \
+        df1_styler = WebTAG1.style.set_table_attributes("style='display:block'") \
                     .set_caption("Opening year: no. of households experiencing 'without scheme' and 'with scheme' noise levels")
-        df2_styler = WebTAGOut2.style.set_table_attributes("style='display:block'") \
+        df2_styler = WebTAG2.style.set_table_attributes("style='display:block'") \
                     .set_caption("Forecast year: no. of households experiencing 'without scheme' and 'with scheme' noise levels")
         display_html(df1_styler._repr_html_()+df2_styler._repr_html_(), raw=True)
     return()
@@ -232,11 +276,8 @@ def DMRBChange(df, column, DT):
     # tables: WT = [45,48,51,54,57,60,63,66,69,72,75,78,81].
     # An Leq coreciton is also added LEQC = 2 to convert L10 to Leq16hr
 
-def Tabular(df, column, OColumns, WT, DN):
-    if DN == 'Day':
-        LEQC = 2
-    else:
-        LEQC = 0
+def Tabular(df, column, OColumns, WT):
+    LEQC = 2
     df.loc[:,"<" + str(WT[0])]              = (df[column] < WT[0]+LEQC)
     df.loc[:,str(WT[0]) + "-" + str(WT[1])] = (df[column] >= WT[0]+LEQC) & (df[column] < WT[1]+LEQC)
     df.loc[:,str(WT[1]) + "-" + str(WT[2])] = (df[column] >= WT[1]+LEQC) & (df[column] < WT[2]+LEQC)
@@ -279,42 +320,43 @@ def AddColumns(X, D, N, S, L):
         X.loc[:,'ST_CH_GC'] = abs(X['ST_CH'])
         OColumns.extend(['ST_CH'])
     if D == 1 and N == 0 and S == 0 and L == 1:
-        X.loc[:,'LT_CH'], X.loc[:,'DM_DM'], X.loc[:,'DMFY_DSFY'] = X['DSFY']-X['DMOY'], X['DMFY']-X['DMOY'], X['DSFY']-X['DMFY']
-        X.loc[:,'LT_CH_GC'], X.loc[:,'DM_DM_GC'], X.loc[:,'DMFY_DSFY_GC'] = abs(X['LT_CH']), abs(X['DM_DM']), abs(X['DMFY_DSFY'])
-        OColumns.extend(['LT_CH', 'DM_DM', 'DMFY_DSFY'])
+        X.loc[:,'LT_CH'] = X['DSFY']-X['DMOY']
+        X.loc[:,'LT_CH_GC'] = abs(X['LT_CH'])
+        OColumns.extend(['LT_CH'])
     if D == 1 and N == 0 and S == 1 and L == 1:
-        X.loc[:,'ST_CH'], X['LT_CH'], X.loc[:,'DM_DM'], X.loc[:,'DMFY_DSFY'] = X['DSOY']-X['DMOY'], X['DSFY']-X['DMOY'], X['DMFY']-X['DMOY'], X['DSFY']-X['DMFY']
-        X.loc[:,'ST_CH_GC'], X['LT_CH_GC'], X.loc[:,'DM_DM_GC'], X.loc[:,'DMFY_DSFY_GC'] = abs(X['ST_CH']), abs(X['LT_CH']), abs(X['DM_DM']), abs(X['DMFY_DSFY'])
-        OColumns.extend(['ST_CH', 'LT_CH', 'DM_DM'])
+        X.loc[:,'ST_CH'], X['LT_CH'] = X['DSOY']-X['DMOY'], X['DSFY']-X['DMOY']
+        X.loc[:,'ST_CH_GC'], X['LT_CH_GC'] = abs(X['ST_CH']), abs(X['LT_CH'])
+        OColumns.extend(['ST_CH', 'LT_CH'])
     if D == 0 and N == 1 and S == 1 and L == 0:
         X.loc[:,'N_ST_CH'] = X['DSOYN']-X['DMOYN']
         X.loc[:,'N_ST_CH_GC'] = abs(X['N_ST_CH'])
         OColumns.extend(['N_ST_CH'])
     if D == 0 and N == 1 and S == 0 and L == 1:
-        X.loc[:,'N_LT_CH'], X.loc[:,'N_DM_DM'], X.loc[:,'DMFYN_DSFYN'] = X['DSFYN']-X['DMOYN'], X['DMFYN']-X['DMOYN'], X['DSFYN']-X['DMFYN']
-        X.loc[:,'N_LT_CH_GC'], X.loc[:,'N_DM_DM_GC'], X.loc[:,'DMFYN_DSFYN_GC'] = abs(X['N_LT_CH']), abs(X['N_DM_DM']), abs(X['DMFYN_DSFYN'])
-        OColumns.extend(['N_LT_CH', 'N_DM_DM', 'DMFYN_DSFYN'])
+        X.loc[:,'N_LT_CH'] = X['DSFYN']-X['DMOYN']
+        X.loc[:,'N_LT_CH_GC'] = abs(X['N_LT_CH'])
+        OColumns.extend(['N_LT_CH'])
     if D == 0 and N == 1 and S == 1 and L == 1:
-        X.loc[:,'N_ST_CH'], X.loc[:,'N_LT_CH'], X.loc[:,'N_DM_DM'], X.loc[:,'DMFYN_DSFYN'] = X['DSOYN']-X['DMOYN'], X['DSFYN']-X['DMOYN'], X['DMFYN']-X['DMOYN'], X['DSFYN']-X['DMFYN']
-        X.loc[:,'N_ST_CH_GC'], X.loc[:,'N_LT_CH_GC'], X.loc[:,'N_DM_DM_GC'], X.loc[:,'DMFYN_DSFYN_GC'] = abs(X['N_ST_CH']), abs(X['N_LT_CH']), abs(X['N_DM_DM']), abs(X['DMFYN_DSFYN'])
-        OColumns.extend(['N_ST_CH', 'N_LT_CH', 'N_DM_DM', 'DMFYN_DSFYN'])
+        X.loc[:,'N_ST_CH'], X.loc[:,'N_LT_CH'] = X['DSOYN']-X['DMOYN'], X['DSFYN']-X['DMOYN']
+        X.loc[:,'N_ST_CH_GC'], X.loc[:,'N_LT_CH_GC'] = abs(X['N_ST_CH']), abs(X['N_LT_CH'])
+        OColumns.extend(['N_ST_CH', 'N_LT_CH'])
     if D == 1 and N == 1 and S == 1 and L== 0:
         X.loc[:,'ST_CH'], X.loc[:,'N_ST_CH'] = X['DSOY']-X['DMOY'], X['DSOYN']-X['DMOYN']
         X.loc[:,'ST_CH_GC'], X.loc[:,'N_ST_CH_GC'] = abs(X['ST_CH']), abs(X['N_ST_CH'])
         OColumns.extend(['ST_CH', 'N_ST_CH'])
     if D == 1 and N == 1 and S == 0 and L == 1:
-        X.loc[:,'LT_CH'], X.loc[:,'DM_DM'], X.loc[:,'DMFY_DSFY'], X.loc[:,'N_LT_CH'], X.loc[:,'N_DM_DM'], X.loc[:,'DMFYN_DSFYN'] = X['DSFY']-X['DMOY'], X['DMFY']-X['DMOY'], X['DSFY']-X['DMFY'], X['DSOYN']-X['DMOYN'], X['DMFYN']-X['DMOYN'], X['DSFYN']-X['DMFYN']
-        X.loc[:,'LT_CH_GC'], X.loc[:,'DM_DM_GC'], X.loc[:,'DMFY_DSFY_GC'], X.loc[:,'N_LT_CH_GC'], X.loc[:,'N_DM_DM_GC'], X.loc[:,'DMFYN_DSFYN_GC'] =  abs(X['LT_CH']), abs(X['DM_DM']), abs(X['DMFY_DSFY']), abs(X['N_LT_CH']), abs(X['N_DM_DM']), abs(X['DMFYN_DSFYN'])
-        OColumns.extend(['LT_CH', 'DM_DM', 'DMFY_DSFY', 'N_LT_CH', 'N_DM_DM', 'DMFYN_DSFYN'])
+        X.loc[:,'LT_CH'], X.loc[:,'N_LT_CH'] = X['DSFY']-X['DMOY'], X['DSOYN']-X['DMOYN']
+        X.loc[:,'LT_CH_GC'], X.loc[:,'N_LT_CH_GC'] =  abs(X['LT_CH']), abs(X['N_LT_CH'])
+        OColumns.extend(['LT_CH', 'N_LT_CH'])
     if D == 1 and N == 1 and S == 1 and L == 1:
-        X.loc[:,'ST_CH'], X.loc[:,'LT_CH'], X.loc[:,'DM_DM'], X.loc[:,'DMFY_DSFY'], X.loc[:,'N_ST_CH'], X.loc[:,'N_LT_CH'], X.loc[:,'N_DM_DM'], X.loc[:,'DMFYN_DSFYN'] = X['DSOY']-X['DMOY'], X['DSFY']-X['DMOY'], X['DMFY']-X['DMOY'], X['DSFY']-X['DMFY'], X['DSOYN']-X['DMOYN'], X['DSFYN']-X['DMOYN'], X['DMFYN']-X['DMOYN'], X['DSFYN']-X['DMFYN']
-        X.loc[:,'ST_CH_GC'], X.loc[:,'LT_CH_GC'], X.loc[:,'DM_DM_GC'], X.loc[:,'DMFY_DSFY_GC'], X.loc[:,'N_ST_CH_GC'], X.loc[:,'N_LT_CH_GC'], X.loc[:,'N_DM_DM_GC'], X.loc[:,'DMFYN_DSFYN_GC'] = abs(X['ST_CH']), abs(X['LT_CH']), abs(X['DM_DM']), abs(X['DMFY_DSFY']), abs(X['N_ST_CH']), abs(X['N_LT_CH']), abs(X['N_DM_DM']), abs(X['DMFYN_DSFYN'])
-        OColumns.extend(['ST_CH', 'LT_CH', 'DM_DM', 'DMFY_DSFY', 'N_ST_CH', 'N_LT_CH', 'N_DM_DM', 'DMFYN_DSFYN'])
+        X.loc[:,'ST_CH'], X.loc[:,'LT_CH'], X.loc[:,'N_ST_CH'], X.loc[:,'N_LT_CH'] = X['DSOY']-X['DMOY'], X['DSFY']-X['DMOY'], X['DSOYN']-X['DMOYN'], X['DSFYN']-X['DMOYN']
+        X.loc[:,'ST_CH_GC'], X.loc[:,'LT_CH_GC'], X.loc[:,'N_ST_CH_GC'], X.loc[:,'N_LT_CH_GC'] = abs(X['ST_CH']), abs(X['LT_CH']), abs(X['N_ST_CH']), abs(X['N_LT_CH'])
+        OColumns.extend(['ST_CH', 'LT_CH', 'N_ST_CH', 'N_LT_CH'])
     Columns = list(X.columns) # Columns are kept with GC
     return(X, Columns, OColumns)
 
     # The LBCGC function processes the incoming building evaluation data and calculates the greatest 
     # change in line with LA111. 
+    
 def LBCGC(Tab1, Columns, OColumns, D, N, S, L):
     Tab1 = np.round(Tab1,1)
     ST, LT = [5, 3, 1, 0, -1, -3, -5], [10, 5, 3, 0, -3, -5, -10]
@@ -335,7 +377,6 @@ def LBCGC(Tab1, Columns, OColumns, D, N, S, L):
     DMRB_LT.set_index(['Change'], inplace=True)
     
     # Setting order of columns
-    
     if D == 1 and S == 1: 
         RelDF['ST_Impact'] = ""
     if D == 1 and L == 1:
@@ -368,8 +409,7 @@ def LBCGC(Tab1, Columns, OColumns, D, N, S, L):
         Tab1NSTGC = pd.DataFrame(Tab1NSTGC1[Tab1NSTGC1['DSOYN'] == Tab1NSTGC1.groupby('BLD')['DSOYN'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")
         Tab1NSTGC.set_index('BLD', inplace=True)
         RelDF.update(Tab1NSTGC['N_ST_CH'])
-        RelDF['DMOYN_WT'] = Tab1NSTGC['DMOYN']  # for ST webtag calculation
-        RelDF['DSOYN_WT'] = Tab1NSTGC['DSOYN']  # for ST webtag calculation
+        
         #facade point values are copied in order of processing (Day long-term is prioritised and is updated last)
         RelDF.update(Tab1NSTGC[['X', 'Y', 'FAC', 'RCVR', 'DMOYN', 'DSOYN']])
         Tab1NSTGCRES, Tab1NSTGCOSR = Tab1NSTGC[Tab1NSTGC['SNSTV']=='RES'], Tab1NSTGC[Tab1NSTGC['SNSTV']=='OSR']
@@ -386,27 +426,13 @@ def LBCGC(Tab1, Columns, OColumns, D, N, S, L):
     
     if N == 1 and L == 1:     
         Tab1NLTGC1 = Tab1[Tab1['N_LT_CH_GC'] == Tab1.groupby('BLD')['N_LT_CH_GC'].transform('max')]
-        Tab1NLTGC = pd.DataFrame(Tab1NLTGC1[Tab1NLTGC1['DSFYN'] == Tab1NLTGC1.groupby('BLD')['DSFYN'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")       
+        Tab1NLTGC = pd.DataFrame(Tab1NLTGC1[Tab1NLTGC1['DSFYN'] == Tab1NLTGC1.groupby('BLD')['DSFYN'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")
         Tab1NLTGC.set_index('BLD', inplace=True)
         RelDF.update(Tab1NLTGC['N_LT_CH'])
         RelDF.update(Tab1NLTGC[['X', 'Y', 'FAC', 'RCVR', 'DMOYN', 'DMFYN', 'DSFYN']]) 
         Tab1NLTGCRES, Tab1NLTGCOSR = Tab1NLTGC[Tab1NLTGC['SNSTV']=='RES'], Tab1NLTGC[Tab1NLTGC['SNSTV']=='OSR']
         DMRBChange(Tab1NLTGCRES, 'N_LT_CH', LT)
         DMRBChange(Tab1NLTGCOSR, 'N_LT_CH', LT)
-        
-        #DM-DM greatest change night time (updating excel output only - not in tables)
-        Tab1NDMGC1 = Tab1[Tab1['N_DM_DM_GC'] == Tab1.groupby('BLD')['N_DM_DM_GC'].transform('max')]
-        Tab1NDMGC = pd.DataFrame(Tab1NDMGC1[Tab1NDMGC1['DMFYN'] == Tab1NDMGC1.groupby('BLD')['DSFYN'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")       
-        Tab1NDMGC.set_index('BLD', inplace=True)
-        RelDF.update(Tab1NDMGC['N_DM_DM'])
-        
-        #DMFY-DSFY greatest change (updating excel output only - not in tables)
-        Tab1NDMFYGC1 = Tab1[Tab1['DMFYN_DSFYN_GC'] == Tab1.groupby('BLD')['DMFYN_DSFYN_GC'].transform('max')]
-        Tab1NDMFYGC = pd.DataFrame(Tab1NDMFYGC1[Tab1NDMFYGC1['DSFYN'] == Tab1NDMFYGC1.groupby('BLD')['DSFYN'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")       
-        Tab1NDMFYGC.set_index('BLD', inplace=True)
-        RelDF['DMFYN_WT'] = Tab1NDMFYGC['DMFYN']  # for LT webtag calculation
-        RelDF['DSFYN_WT'] = Tab1NDMFYGC['DSFYN']  # for LT webtag calculation
-        RelDF.update(Tab1NDMFYGC['DMFYN_DSFYN'])
         DMRBCatagory(RelDF, 'N_LT_CH', 'N_LT_Impact', LT) # magnitude of impact category column
         
         LTNightDwellGC = pd.DataFrame(Tab1NLTGCRES[Tab1NLTGCRES.columns.difference(Columns)].sum(), columns=['LT Night RES']).rename_axis('Change').reset_index()
@@ -421,8 +447,7 @@ def LBCGC(Tab1, Columns, OColumns, D, N, S, L):
         Tab1STGC = pd.DataFrame(Tab1STGC1[Tab1STGC1['DSOY'] == Tab1STGC1.groupby('BLD')['DSOY'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")
         Tab1STGC.set_index('BLD', inplace=True)
         RelDF.update(Tab1STGC['ST_CH'])
-        RelDF['DMOY_WT'] = Tab1STGC['DMOY']  # for ST webtag calculation
-        RelDF['DSOY_WT'] = Tab1STGC['DSOY']  # for ST webtag calculation
+        RelDF['DMOY_ST'] = Tab1STGC['DMOY']  # for ST webtag calculation
         RelDF.update(Tab1STGC[['X', 'Y', 'FAC', 'RCVR', 'DMOY', 'DSOY']])
         Tab1STGCRES, Tab1STGCOSR = Tab1STGC[Tab1STGC['SNSTV']=='RES'], Tab1STGC[Tab1STGC['SNSTV']=='OSR']
         DMRBChange(Tab1STGCRES, 'ST_CH', ST)
@@ -440,26 +465,12 @@ def LBCGC(Tab1, Columns, OColumns, D, N, S, L):
         Tab1LTGC1 = Tab1[Tab1['LT_CH_GC'] == Tab1.groupby('BLD')['LT_CH_GC'].transform('max')]
         Tab1LTGC = pd.DataFrame(Tab1LTGC1[Tab1LTGC1['DSFY'] == Tab1LTGC1.groupby('BLD')['DSFY'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")
         Tab1LTGC.set_index('BLD', inplace=True)
-        RelDF.update(Tab1LTGC['LT_CH'])
+        RelDF['DMOY_LT'] = Tab1STGC['DMOY'] # long term do minimum if required
         RelDF.update(Tab1LTGC[['X', 'Y', 'FAC', 'RCVR', 'DMOY', 'DMFY', 'DSFY']])
         Tab1LTGCRES, Tab1LTGCOSR = Tab1LTGC[Tab1LTGC['SNSTV']=='RES'], Tab1LTGC[Tab1LTGC['SNSTV']=='OSR']
         DMRBChange(Tab1LTGCRES, 'LT_CH', LT)
         DMRBChange(Tab1LTGCOSR, 'LT_CH', LT)
         DMRBCatagory(RelDF, 'LT_CH', 'LT_Impact', LT)
-               
-        #DM-DM greatest change (updating excel output only - not in tables)
-        Tab1DMGC1 = Tab1[Tab1['DM_DM_GC'] == Tab1.groupby('BLD')['DM_DM_GC'].transform('max')]
-        Tab1DMGC = pd.DataFrame(Tab1DMGC1[Tab1DMGC1['DMFY'] == Tab1DMGC1.groupby('BLD')['DMFY'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")       
-        Tab1DMGC.set_index('BLD', inplace=True)
-        RelDF.update(Tab1DMGC['DM_DM'])
-        
-        #long term do minimum (DMFY-DSFY) greatest change (updating excel output only - not in tables)
-        Tab1DMFYGC1 = Tab1[Tab1['DMFY_DSFY_GC'] == Tab1.groupby('BLD')['DMFY_DSFY_GC'].transform('max')]
-        Tab1DMFYGC = pd.DataFrame(Tab1DMFYGC1[Tab1DMFYGC1['DSFY'] == Tab1DMFYGC1.groupby('BLD')['DSFY'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")       
-        Tab1DMFYGC.set_index('BLD', inplace=True)
-        RelDF['DMFY_WT'] = Tab1DMFYGC['DMFY'] # For LT Webtag calculation
-        RelDF['DSFY_WT'] = Tab1DMFYGC['DSFY'] # long term do minimum future year for WebTAG
-        RelDF.update(Tab1DMFYGC['DMFY_DSFY'])
         
         LTDayDwellGC = pd.DataFrame(Tab1LTGCRES[Tab1LTGCRES.columns.difference(Columns)].sum(), columns=['LT Day RES']).rename_axis('Change').reset_index()
         LTDayOSRGC = pd.DataFrame(Tab1LTGCOSR[Tab1LTGCOSR.columns.difference(Columns)].sum(), columns=['LT Day OSR']).rename_axis('Change').reset_index()
@@ -469,6 +480,7 @@ def LBCGC(Tab1, Columns, OColumns, D, N, S, L):
         DMRB_LT.update(LTDayOSRGC['LT Day OSR'])
     
     # Once the DMRB dataframes are created, totals for each column are calculated. 
+    
     DMRB_ST.loc["Total"] = DMRB_ST.sum()
     DMRB_LT.loc["Total"] = DMRB_LT.sum()
     DMRB_ST.reset_index(inplace=True)
@@ -476,10 +488,10 @@ def LBCGC(Tab1, Columns, OColumns, D, N, S, L):
     return(DMRB_ST, DMRB_LT, RelDF, RelColumns)
 
     # AbsOut processes the absolute values from the buidling evaluation data and prepares  
-    # the results for export to Excel
+    # the results for export to Excel and zipped shapefiles
     # Noise insulation calculations are also processed in this function.
     
-def AbsOut(Tab1, RelDF, OColumns, LOAEL, SOAEL, NLOAEL, NSOAEL, D, N, S, L, I):
+def AbsOut(Tab1, RelDF, OColumns, LOAEL, SOAEL, NLOAEL, NSOAEL, outfile, D, N, S, L, I):
     AbsDF2 = pd.DataFrame(Tab1.drop_duplicates(subset="BLD", keep = "first"))
     AbsDF = AbsDF2[OColumns]
     AbsDF.set_index('BLD', inplace=True)
@@ -566,7 +578,8 @@ def AbsOut(Tab1, RelDF, OColumns, LOAEL, SOAEL, NLOAEL, NSOAEL, D, N, S, L, I):
         AbsDF.loc[:,'DSFYN_NEW_LOAEL'] = np.where((AbsDF.loc[:,'DMOYN']<NLOAEL) & (AbsDF['DSFYN']>=NLOAEL),'Yes','No')
         AbsDF.loc[:,'DSFYN_NEW_SOAEL'] = np.where((AbsDF.loc[:,'DMOYN']<NSOAEL) & (AbsDF['DSFYN']>=NSOAEL),'Yes','No')  
         AbsDFCol.extend(['DSFYN_LOAEL','DSFYN_SOAEL','DSFYN_NEW_LOAEL','DSFYN_NEW_SOAEL'])
-    if I == 1 and D == 1:
+   
+    if I == 1:
         NIRDF = NIRDF[OColumns]
         NIRDF.set_index('RCVR', inplace=True)
         NIRDF['Condition1'] = np.where(NIRDF.loc[:,'DSOY']>=67.5,'Yes','No')
@@ -574,45 +587,70 @@ def AbsOut(Tab1, RelDF, OColumns, LOAEL, SOAEL, NLOAEL, NSOAEL, D, N, S, L, I):
         Condition1 = NIRDF[NIRDF['Condition1'] == 'Yes'].drop_duplicates(subset="BLD", keep = "first").shape[0]
         Condition2 = NIRDF[NIRDF['Condition2'] == 'Yes'].drop_duplicates(subset="BLD", keep = "first").shape[0]
         NIRDF = NIRDF[NIRDF['Condition1'] == 'Yes']
-        NIRDF = pd.DataFrame(NIRDF[NIRDF['ST_CH'] == NIRDF.groupby('BLD')['ST_CH'].transform('max')]).drop_duplicates(subset="BLD", keep = "first")
         print('\n> Calculating noise insulation.')
         print('> Dwellings exceeding 68dB in DSOY on any facade: ', str(Condition1))
         print('> Dwellings exceeding 68dB in DSOY and >= 1dB ST change on same facade: ', str(Condition2))   
     return(AbsDF, AbsDFCol, NIRDF)
 
-# DataOutput saves results to excel
-def DataOutput(outputloc, outputfilename, AbsDF, AbsDFCol, RelDF, RelColumns, WebTAG1, WebTAG2, WebTAGN1, WebTAGN2, NIRDF, P, D, N, W, I):
+# DataOutput saves results to excel and zipped shapefiles
+    
+def DataOutput(AbsDF, AbsDFCol, RelDF, RelColumns, WebTAG1, WebTAG2, NIRDF, G, P, W, I):
     if P == 1:
-        print('> Saving data to '+outputfilename)
+        print('> Saving data to output.xlsx')
         AbsDFOut = AbsDF[AbsDFCol]
         RelDFOut = RelDF[RelColumns]
-        with pd.ExcelWriter(outputloc+"/"+outputfilename, engine='openpyxl') as writer:  
+        with pd.ExcelWriter("Output/output.xlsx", engine='openpyxl') as writer:  
             AbsDFOut.to_excel(writer, sheet_name='Highest absolute levels')
             print('> ... Highest absolute levels')
             RelDFOut.to_excel(writer, sheet_name='Magnitude of Impact')
             print('> ... Magnitude of Impact')
             if W ==1:
                 print('> ... WebTAG tables')
-                colvard = 35 if N == 1 else 18
-                colvarn = 18 if D == 1 else 1
-                colverr = 52 if D == 1 else 18
-                if D == 1:
-                    WebTAG1.to_excel(writer, sheet_name='WebTAG', startrow=1)
-                    ws = writer.sheets['WebTAG']
-                    ws.cell(row=1, column=1).value = "Opening year: no. of households experiencing 'without scheme' and 'with scheme' noise levels"
-                    ws.cell(row=2, column=1).value = "dB (LAeq,16hr)"
-                    ws.cell(row=colvard, column=1).value = "Forecast year: no. of households experiencing 'without scheme' and 'with scheme' noise levels"
-                    ws.cell(row=colvard+1, column=1).value = "dB (LAeq,16hr)"
-                    WebTAG2.to_excel(writer, sheet_name='WebTAG', startrow=colvard)
-                if N == 1:
-                    WebTAGN1.to_excel(writer, sheet_name='WebTAG', startrow=colvarn)
-                    ws = writer.sheets['WebTAG']
-                    ws.cell(row=colvarn, column=1).value = "Opening year: no. of households experiencing 'without scheme' and 'with scheme' noise levels"
-                    ws.cell(row=colvarn+1, column=1).value = "dB (Lnight)"
-                    ws.cell(row=colverr, column=1).value = "Forecast year: no. of households experiencing 'without scheme' and 'with scheme' noise levels"       
-                    ws.cell(row=colverr+1, column=1).value = "dB (Lnight)"
-                    WebTAGN2.to_excel(writer, sheet_name='WebTAG', startrow=colverr)
+                WebTAG1.to_excel(writer, sheet_name='WebTAG', startrow=1)
+                ws = writer.sheets['WebTAG']
+                ws.cell(row=1, column=1).value = "Opening year: no. of households experiencing 'without scheme' and 'with scheme' noise levels"
+                ws.cell(row=18, column=1).value = "Forecast year: no. of households experiencing 'without scheme' and 'with scheme' noise levels"
+                WebTAG2.to_excel(writer, sheet_name='WebTAG', startrow=18)
             if I ==1:
-                print('> ... buildings with facades exceeding 67.5dB (maximum short term change exported)')
-                NIRDF.to_excel(writer, sheet_name='Noise Insulation', startrow=0)
+                print('> ... facade points exceeding 67.5dB')
+                NIRDF.to_excel(writer, sheet_name='NIR facade points', startrow=0)
+    
+    if G == 1:
+        print("> Creating and joining data to shape file")
+        AbsDFgpd = gpd.GeoDataFrame(AbsDF, geometry=gpd.points_from_xy(AbsDF['X'], AbsDF['Y']), crs="epsg:27700")
+        RelDFgpd = gpd.GeoDataFrame(RelDFOut, geometry=gpd.points_from_xy(RelDF['X'], RelDF['Y']), crs="epsg:27700")
+        if I == 1:
+            NIRDFgpd = gpd.GeoDataFrame(NIRDF, geometry=gpd.points_from_xy(NIRDF['X'], NIRDF['Y']), crs="epsg:27700")
+        root = "Output"
+        base = "zip"
+        tempdir = root+"/"+base +"/"
+        output_filename = "Output"
+        basename = root+"/"+output_filename
+        if path.exists(tempdir):
+            try:
+                rmtree(tempdir)
+            except OSError as e:
+                print("Error: %s : %s" % (tempdir, e.strerror))
+            mkdir(tempdir)
+            AbsDFgpd.to_file(tempdir+"Absolute_Levels.shp")
+            RelDFgpd.to_file(tempdir+"Impact_Magnitude.shp")
+            if I == 1:
+                NIRDFgpd.to_file(tempdir+"NIR_facades.shp")
+            print("> Compressing output to zip file: "+output_filename+".zip")
+            make_archive(base_dir=base, root_dir=root, format='zip', base_name=basename)
+        else:
+            mkdir(tempdir)
+            AbsDFgpd.to_file(tempdir+"Absolute_Levels.shp")
+            RelDFgpd.to_file(tempdir+"Impact_Magnitude.shp")
+            if I == 1:
+                NIRDFgpd.to_file(tempdir+"NIR_facades.shp")
+            print("> Saving "+output_filename+" as zip file")
+            make_archive(base_dir=base, root_dir=root, format='zip', base_name=basename)
+        try:
+            rmtree(tempdir)
+        except OSError as e:
+            print("Error: %s : %s" % (tempdir, e.strerror))
+
+    
+
 
